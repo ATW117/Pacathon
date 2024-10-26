@@ -28,7 +28,7 @@ public final class SpecialTrainingConditions {
 
     public static @NotNull EventListener<EntityPreSpawnEvent> onEntityPreSpawn() {
         return event -> {
-            // Prevent ghosts from spawning during training
+            // // Prevent ghosts from spawning during training
             if (event.getEntityType() == EntityType.GHOST) {
                 event.setCancelled(true);
             }

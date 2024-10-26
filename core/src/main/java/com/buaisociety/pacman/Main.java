@@ -49,7 +49,7 @@ public class Main extends ApplicationAdapter {
     private OrthographicCamera camera;
 
     private final @NotNull EventSystem events = new EventSystem();
-    private final @NotNull Vector2i visibleGames = new Vector2i(4, 2);
+    private final @NotNull Vector2i visibleGames = new Vector2i(4, 4);
     private final @NotNull List<PacmanNeatClient> managers = new ArrayList<>();
     private final int totalGames = 250;
     private GameLoop secondLoop;  // 1 update per second
@@ -69,13 +69,14 @@ public class Main extends ApplicationAdapter {
         camera = new OrthographicCamera();
         batch = new SpriteBatch();
         camera.setToOrtho(false, 8 * 28 * visibleGames.x, 8 * 36 * visibleGames.y);
+        Gdx.graphics.setWindowedMode(8 * 28 * 4, 8 * 36 * 4); 
         neat = createNeat();
         neatPrinter = new NeatPrinter(neat);
         neatSaver = new NeatSaver(neat, getSaveFolder());
         secondLoop = new GameLoop(1);
 
         int processors = Runtime.getRuntime().availableProcessors();
-        threadPool = Executors.newFixedThreadPool(processors);
+        threadPool = Executors.newFixedThreadPool(processors * 2);
         System.out.println("Using " + processors + " threads");
 
         // When all games have ended, reset
@@ -105,7 +106,7 @@ public class Main extends ApplicationAdapter {
         // Change this to true/false as needed, if you want to load from file
         if (false) {
             // TODO: Change this to the exact file you want to load
-            File exactFile = new File("saves" + File.separator + "oct26-4" + File.separator + "generation-51.json");
+            File exactFile = new File("saves" + File.separator + "oct25-12" + File.separator + "generation-102.json");
             // load exactFile contents to string
             String json;
             try {
@@ -115,7 +116,7 @@ public class Main extends ApplicationAdapter {
             }
             NeatImpl impl = NeatImpl.fromJson(json);
             // modify this as needed
-            //impl.updateNodeCounts(8, 4);  // Add 4 new inputs
+            //impl.updateNodeCounts(6, 4);  // Add 4 new inputs
             //impl.updateClients(200);  // have 200 pacman games at once
             return impl;
         } else {
@@ -125,7 +126,7 @@ public class Main extends ApplicationAdapter {
             neatParameters.setTargetClientsPerSpecies(12);  // targeting ~12 clients per species
             neatParameters.setStagnationLimit(10);  // lower stagnation limit
             neatParameters.setUseBiasNode(true);  // use bias node
-            return new NeatImpl(4, 4, totalGames, neatParameters);
+            return new NeatImpl(12, 4, totalGames, neatParameters);
         }
     }
 
@@ -191,37 +192,41 @@ public class Main extends ApplicationAdapter {
     }
 
     @Override
-    public void render() {
+public void render() {
+    paused ^= Gdx.input.isKeyJustPressed(Input.Keys.SPACE);
+    showNetworks ^= Gdx.input.isKeyJustPressed(Input.Keys.TAB);
 
-        paused ^= Gdx.input.isKeyJustPressed(Input.Keys.SPACE);
-        showNetworks ^= Gdx.input.isKeyJustPressed(Input.Keys.TAB);
+    frames++;
+    fps++;
 
-        frames++;
-        fps++;
+    if (secondLoop.update()) {
+        System.out.println("FPS: " + fps + ", Frames: " + frames);
+        fps = 0;
+    }
 
-        if (secondLoop.update()) {
-            System.out.println("FPS: " + fps + ", Frames: " + frames);
-            fps = 0;
-        }
+    // If all games are complete, reset
+    if (managers.stream().map(PacmanNeatClient::getGameCompleteFuture).allMatch(CompletableFuture::isDone)) {
+        reset();
+        System.out.println(neatPrinter.render());
+        neatSaver.save();
+        neat.evolve();
+    }
 
-        // If all games are complete, reset
-        if (managers.stream().map(PacmanNeatClient::getGameCompleteFuture).allMatch(CompletableFuture::isDone)) {
-            reset();
-            System.out.println(neatPrinter.render());
-            neatSaver.save();
-            neat.evolve();
-        }
-
-        // Update games
+    // Update games in batches (e.g., 100 games at a time)
+    int batchSize = 100;  // Customize this to control batch size
+    for (int i = 0; i < totalGames; i += batchSize) {
         List<Future<?>> futures = new ArrayList<>();
         List<PacmanNeatClient> updatedManagers = new ArrayList<>();
-        for (PacmanNeatClient manager : managers) {
+
+        // Process a batch of games in parallel
+        for (int j = i; j < Math.min(i + batchSize, totalGames); j++) {
+            PacmanNeatClient manager = managers.get(j);
             manager.setRenderNetwork(showNetworks);
             if (manager.getGameCompleteFuture().isDone())
                 continue;
 
             if (!paused) {
-                // Submit the update task and add to updatedManagers
+                // Submit the update task for the current batch
                 Future<?> future = threadPool.submit(() -> {
                     manager.getGameManager().update();
                 });
@@ -230,7 +235,7 @@ public class Main extends ApplicationAdapter {
             }
         }
 
-        // Wait for all games to be updated
+        // Wait for all games in the batch to be updated
         for (Future<?> future : futures) {
             try {
                 future.get();
@@ -243,31 +248,32 @@ public class Main extends ApplicationAdapter {
         for (PacmanNeatClient manager : updatedManagers) {
             manager.getGameManager().postUpdate();
         }
-
-        // Render everything
-        ScreenUtils.clear(0, 0, 0, 1);
-        batch.begin();
-
-        // Get a copy of the managers list and sort by score so the best are rendered first
-        List<PacmanNeatClient> sortedManagers = new ArrayList<>(managers);
-        sortedManagers.sort(Comparator.comparingInt(manager -> -manager.getGameManager().getScore()));
-
-        int renderCount = 0;
-        for (PacmanNeatClient manager : managers) {
-            if (manager.getGameCompleteFuture().isDone())
-                continue;
-            if (renderCount >= visibleGames.x * visibleGames.y)
-                break;
-
-            int gameX = renderCount % visibleGames.x;
-            int gameY = renderCount / visibleGames.x;
-            renderCount++;
-
-            batch.setProjectionMatrix(camera.combined.cpy().translate(gameX * 8 * 28, gameY * 8 * 36, 0));
-            manager.render(batch);
-        }
-        batch.end();
     }
+
+    // Render everything
+    ScreenUtils.clear(0, 0, 0, 1);
+    batch.begin();
+
+    // Render the managers (you can sort by score as in the original code)
+    int renderCount = 0;
+    for (PacmanNeatClient manager : managers) {
+        if (manager.getGameCompleteFuture().isDone())
+            continue;
+        if (renderCount >= visibleGames.x * visibleGames.y)
+            break;
+    
+        // Render the game objects (e.g., Pacman, ghosts)
+        int gameX = renderCount % visibleGames.x;
+        int gameY = renderCount / visibleGames.x;
+        renderCount++;
+
+        batch.setProjectionMatrix(camera.combined.cpy().translate(gameX * 8 * 28, gameY * 8 * 36, 0));
+        manager.render(batch);
+    }
+
+    batch.end();
+}
+
 
     @Override
     public void dispose() {

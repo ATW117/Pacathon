@@ -21,6 +21,20 @@ public class Tile {
         this.position = position;
         this.state = state;
     }
+    public boolean isPassable() {
+        return this.state == TileState.PELLET || this.state == TileState.POWER_PELLET || this.state == TileState.SPACE;
+    }
+    private boolean visited = false;  // New field to track visited status
+
+    // Call this method when Pac-Man visits the tile
+    public void setVisited(boolean visited) {
+        this.visited = visited;
+    }
+
+    // Check if Pac-Man has visited this tile
+    public boolean isVisited() {
+        return visited;
+    }    
 
     /**
      * Returns the maze that this tile is a part of.
